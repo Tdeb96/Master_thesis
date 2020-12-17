@@ -11,7 +11,6 @@ library(WeightIt)
 
 sourceCpp("~/Dropbox/Uni/Master_Econometrie/Thesis/Code/R/gammaui.cpp")
 
-
 # Tools ------------------------------------------------------------------------
 
 # Partial loglikelihood when observed value is 1
@@ -39,6 +38,12 @@ mu <- function(x){
   return(1 / (1 + exp(-x)))
 }
 
+
+
+
+
+
+#Basemodel functions -------
 #' Create a train/test split, given a training set
 #'
 #' @param df df containing indices, click, and "ratio" columns (see "1.1 Data preparation")
@@ -102,8 +107,6 @@ trainTest <- function(df, onlyVar, cv=FALSE, ind=NULL, fold=NULL){
   output <- list("df_train" = df_train, "df_test" = df_test)
   return(output)
 }
-
-#Basemodel functions -------
 
 #' Gives initial estimates for alpha, beta, C and D
 #'
@@ -181,7 +184,7 @@ initChoose <- function(df, factors, lambda, initType, a_in = NULL, b_in = NULL,
 #' @param epsilon Convergence criteria
 #'
 #' @return returns parameters alpha, beta, C and D
-parEst <- function(df, factors, lambda, iter, initType, llh, rmse, df_test=NULL, 
+parEst <- function(df, factors, lambda, iter, initType, llh = TRUE, time, df_test=NULL, 
                    epsilon=NULL, a_in = NULL, b_in = NULL, C_in = NULL, D_in = NULL) {
   names(df) <- c("USERID_ind", "OFFERID_ind", "CLICK")
   
@@ -195,8 +198,9 @@ parEst <- function(df, factors, lambda, iter, initType, llh, rmse, df_test=NULL,
   C <- scale(initPars$C, scale = FALSE)
   D <- scale(initPars$D, scale = FALSE)
   
-  # Because Thijs' code uses matrix
+  #Define parameters
   df <- as.matrix(df)
+  logllh_old <- NULL
   
   nu <- max(df[,"USERID_ind"])
   ni <- max(df[,"OFFERID_ind"])
@@ -213,38 +217,41 @@ parEst <- function(df, factors, lambda, iter, initType, llh, rmse, df_test=NULL,
   
   run <- 1
   
-  if (!is.null(epsilon) || llh) {
-    logllh <- sum(logllh1(gamma_y1)) + sum(logllh0(gamma_y0))
-    logllh_new <- logllh + 
-      lambda/2 * norm(C, type="F")^2 + lambda/2 * norm(D, type="F")^2
-  }
-  
   if (llh) {
     # Keeping track of likelihoods
     logllh_all <- rep(NA, (iter+1))
-    
-    # Calculate log likelihood
-    logllh_all[run] <- logllh
   } else {
     logllh_all <- NA
   }
   
-  if (rmse) {
-    # Keeping track of rmse
-    rmse_it <- rep(NA, (iter+1))
-    temp <- getPredict(df_test, alpha, beta, C, D)
-    predictions <- temp$prediction
-    # Majority rule
-    predictions[is.na(predictions)] <- 0
-    actuals <- temp$CLICK
-    
-    rmse[run] <- sqrt(mean((predictions - actuals)^2))
+  if(time){
+    # Keeping track of time
+    tic.clearlog()
   } else {
-    rmse_it <- NA
+    timings <- NA
   }
   
   while (run <= iter) {
-    tic("iteration")
+    tic("time of an iteration")
+    
+    if (!is.null(epsilon) || llh) {
+      logllh <- sum(logllh1(gamma_y1)) + sum(logllh0(gamma_y0))
+      logllh_new <- logllh +
+        lambda / 2 * norm(C, type = "F") ^ 2 + lambda / 2 * norm(D, type = "F") ^ 2
+    }
+    
+    if (llh){
+      # Log Likelihood of current iteration
+      logllh_all[run] <- logllh_new
+    }
+    
+    if(run>1){
+      if (!is.null(epsilon)) {
+        print(logllh_new)
+        print((logllh_new-logllh_old)/logllh_old)
+        if (abs((logllh_new-logllh_old)/logllh_old) < epsilon) break
+      }
+    }
     # tic(paste("Complete iteration", run, sep = " "))
     #Define low rank representation of gamma0
     low_rankC <- cbind(C, alpha, rep(1, nu))
@@ -256,7 +263,6 @@ parEst <- function(df, factors, lambda, iter, initType, llh, rmse, df_test=NULL,
     #Calculate respective first derivatives for both y=1 and y=0
     df1[,"deriv"] <- -4 * derf1(gamma_y1)
     df0[,"deriv"] <- -4 * derf2(gamma_y0)
-    
     
     #Combine the results in one matrix
     df01 <- rbind(df1, df0)
@@ -299,48 +305,26 @@ parEst <- function(df, factors, lambda, iter, initType, llh, rmse, df_test=NULL,
       D <- results$v %*% diag(sqrt(results$d))
     }
     
-    run <- run + 1
-    
     # Updating gamma
     gamma_y1 <- get_gamma0(y1[,1], y1[,2], alpha, beta, C, D)
     gamma_y0 <- get_gamma0(y0[,1], y0[,2], alpha, beta, C, D)
     
+    #Save old log likelihood value
     if (!is.null(epsilon)) {
       logllh_old <- logllh_new
     }
-    if (!is.null(epsilon) || llh) {
-      logllh <- sum(logllh1(gamma_y1)) + sum(logllh0(gamma_y0))
-      logllh_new <- logllh +
-        lambda / 2 * norm(C, type = "F") ^ 2 + lambda / 2 * norm(D, type = "F") ^ 2
-    }
     
-    # 
-    if (llh){
-      # Log Likelihood of current iteration
-      logllh_all[run] <- logllh
-    }
-    
-    if (rmse){
-      # RMSE of current iteration
-      temp <- getPredict(df_test, alpha, beta, C, D)
-      predictions <- temp$prediction
-      predictions[is.na(predictions)] <- 0
-      actuals <- temp$CLICK
-      
-      rmse_it[run] <- sqrt(mean((predictions - actuals)^2))
-    }
-    # toc()
-    
-    if (!is.null(epsilon)) {
-      print(logllh_new)
-      print((logllh_new-logllh_old)/logllh_old)
-      if (abs((logllh_new-logllh_old)/logllh_old) < epsilon) break
-    }
-    toc()
+    toc(log = TRUE)
+    run <- run + 1
   }
   
-  output <- list("alpha" = alpha, "beta" = beta, "C" = C, "D" = D, "logllh" = logllh_all, 
-                 "rmse" = rmse_it, "run" = run)
+  if(time){
+    log.lst <- tic.log(format = FALSE)
+    timings <- unlist(lapply(log.lst, function(x) x$toc - x$tic))
+  }
+  
+  output <- list("alpha" = alpha, "beta" = beta, "C" = C, "D" = D, "logllh" = logllh_all[1:run], 
+                 "run" = run, time = timings)
   return(output)
 }
 
@@ -412,8 +396,13 @@ fullAlg <- function(df_train, df_test, factors, lambda, iter, initType, llh=FALS
   results$prediction[is.na(results$prediction)] <- 0
   RMSE <- sqrt(mean((results$prediction - results$CLICK)^2))
   
+  #Calculate MPR
+  results <- results %>% group_by(USERID_ind) %>% mutate("perc_rank" = rank(1-prediction)/n())
+  MPR <- sum(results$CLICK*results$perc_rank)/sum(results$CLICK)
+  
+  
   # Calculate confusion matrix
-  threshold <- 0.02192184 # average click rate
+  threshold <- 0.02191325 # average click rate
   results$predictionBin <- rep(0, length(results$prediction))
   results$predictionBin[results$prediction > threshold] <- 1
   
@@ -426,7 +415,7 @@ fullAlg <- function(df_train, df_test, factors, lambda, iter, initType, llh=FALS
   confusion <- list("TP" = TP, "TN" = TN, "FP" = FP, "FN" = FN)
   
   # Output
-  output <- list("parameters" = pars, "prediction" = results, "RMSE" = RMSE, 
+  output <- list("parameters" = pars, "prediction" = results, "RMSE" = RMSE, "MPR" = MPR,
                  "confusion" = confusion)
   return(output)
 }
@@ -440,12 +429,12 @@ crossValidate <- function(df, FACTORS, LAMBDA, INITTYPE, ONLYVAR, folds, iter,
   
   # Columns for the hyperparameters, plus a name variable, and then all the results you want
   # these are: rmse, TP (true positive(1)), TN, FP, FN, number of iterations, best baseline, epsilon
-  columns <- 14
+  columns <- 15
   
   # Initialize the df (depth is the number of folds)
   CVoutput <- data.frame(matrix(NA, nrow = rows, ncol = columns))
   names(CVoutput) <- c("Factor", "Lambda", "InitType", "OnlyVar", "Epsilon", "Specification",
-                       "RMSE", "TP", "TN", "FP", "FN", "Iter", "rmseUser", "DifferenceRMSE")
+                       "RMSE", "MPR", "TP", "TN", "FP", "FN", "Iter", "rmseUser", "DifferenceRMSE")
   
   # Now we loop
   # First we make the folds
@@ -502,6 +491,7 @@ crossValidate <- function(df, FACTORS, LAMBDA, INITTYPE, ONLYVAR, folds, iter,
             
             # Performance variables
             CVoutput$RMSE[row] <- output$RMSE
+            CVoutput$MPR[row] <- output$MPR
             CVoutput$TP[row] <- output$confusion$TP
             CVoutput$TN[row] <- output$confusion$TN
             CVoutput$FP[row] <- output$confusion$FP
@@ -561,6 +551,81 @@ baselinePred <- function(df_train, df_test){
 
 
 #Thesis functions--------
+#' Create a train/test split, given a training set
+#'
+#' @param df df containing indices, click, and "ratio" columns (see "1.1 Data preparation")
+#' @param onlyVar logical variable specifying whether rows/columns without variation (only)
+#' @param cv indicates whether train test split is made for CV
+#' @param ind vector with fold indices in case of CV
+#' @param fold fold that should currently be the test set
+#' zeroes or ones are omitted
+#' @param X Data frame containing the additional information for users
+#' @param G Data frame containing the additional information for items
+#'
+#' @return returns a training set and the test set
+trainTest_thes <- function(df, X, G, onlyVar, cv=FALSE, ind=NULL, fold=NULL){
+  
+  # Formatting
+  names(df) <- c("USERID_ind", "OFFERID_ind", "CLICK", "ratioU", "ratioO")
+  
+  # Make the test train split (test is 1)
+  if (cv){
+    # In case of cross validation (recode to zeroes and ones for ease)
+    df$train_test <- 0
+    df$train_test[ind == fold] <- 1
+  }
+  else {
+    # In case of a random draws
+    df$train_test <- rbinom(n = nrow(df), size = 1, prob = 0.2)
+  }
+  
+  # Pre-allocate column for predictions
+  df$prediction <- NA
+  
+  # Deleting the rows/columns without variation
+  if (onlyVar) {
+    
+    # Split them (temporarily)
+    df_test <- df[as.logical(df$train_test), ]
+    df_train <- df[!(as.logical(df$train_test)), ]
+    
+    # Assign the 0 or 1 to test set obs where a ratio is 0 or 1 (prediction in advance)
+    df_test$prediction[(df_test$ratioU == 0 | df_test$ratioO == 0)] <- 0
+    df_test$prediction[(df_test$ratioU == 1 | df_test$ratioO == 1)] <- 1
+    
+    # Drop the train obs where a ratio is 0 or 1
+    df_train <- df_train[!(df_train$ratioU == 0 | df_train$ratioO == 0 | 
+                             df_train$ratioU == 1 | df_train$ratioO == 1), ]
+    
+    # Merge the two to make indices
+    df <- dplyr::bind_rows(df_train, df_test)
+  }
+  
+  # Create new keys. Make sure test is at bottom
+  df <- df[order(df$train_test), ]
+  
+  key_user <- data.frame("USERID_ind" = unique(df$USERID_ind)) %>%
+    mutate(USERID_ind_new = group_indices(., factor(USERID_ind, levels = unique(USERID_ind))))
+  key_item <- data.frame("OFFERID_ind" = unique(df$OFFERID_ind)) %>% 
+    mutate(OFFERID_ind_new = group_indices(., factor(OFFERID_ind, levels = unique(OFFERID_ind))))
+  
+  #Left join keys with matrices
+  df <- df %>% left_join(key_user) %>% left_join(key_item)
+  X <- X %>% left_join(key_user) %>% select(-c("USERID_ind"))
+  G <- G %>% left_join(key_item) %>% select(-c("OFFERID_ind"))
+  
+  # Split sets
+  #Keep old and new keys for test
+  df_test <- df[as.logical(df$train_test), ]
+  #keep only the new keys for the train, to be in lign with X and G
+  df_train <- df[!(as.logical(df$train_test)), c("USERID_ind_new", "OFFERID_ind_new", "CLICK", 
+                                                 "ratioU", "ratioO")]
+  
+  # Return
+  output <- list("df_train" = df_train, "df_test" = df_test, "X" = X, "G" = G, key_user, key_item)
+  return(output)
+}
+
 #' Reformat both df, X and G
 #'
 #' @param df 
@@ -571,51 +636,83 @@ baselinePred <- function(df_train, df_test){
 #' @export
 #'
 #' @examples
-formatdfXG <- function(df, X, G){
+formatdfXG <- function(df_train, X, G){
+  names(df_train) <- c("USERID_ind_new", "OFFERID_ind_new", "CLICK")
+  
   #select only users and items which are in the training set
-  X <- X[which(X$USERID_ind %in% df$USERID_ind),]
-  G <- G[which(G$OFFERID_ind %in% df$OFFERID_ind),]
+  X <- X[which(X$USERID_ind_new %in% df_train$USERID_ind_new),]
+  G <- G[which(G$OFFERID_ind_new %in% df_train$OFFERID_ind_new),]
   
   #define matrix characteristics
-  nu <- max(df[ ,"USERID_ind"])
-  ni <- max(df[ ,"OFFERID_ind"])
+  nu <- max(df_train$USERID_ind_new)
+  ni <- max(df_train$OFFERID_ind_new)
   nx <- nrow(X)
   ng <- nrow(G)
   
+  #create empty list for the keys
   keys <- list()
   
   #Create two keys, one with user and one with item indexes
-  key_user <-  data.frame(USERID_ind = unique(df$USERID_ind))
-  key_item <-  data.frame(OFFERID_ind = unique(df$OFFERID_ind))
+  key_user <-  data.frame(USERID_ind_new = unique(df_train$USERID_ind_new))
+  key_item <-  data.frame(OFFERID_ind_new = unique(df_train$OFFERID_ind_new))
   
   #recode the X and the G so that the indices of the users and items in the X and G are first
   X_newind <- X %>% 
-    mutate(new_USERID_ind = group_indices(., factor(USERID_ind, levels = unique(USERID_ind))))
+    mutate(USERID_recoded = group_indices(., factor(USERID_ind_new, levels = unique(USERID_ind_new))))
   G_newind <- G %>% 
-    mutate(new_OFFERID_ind = group_indices(., factor(OFFERID_ind, levels = unique(OFFERID_ind))))
+    mutate(OFFERID_recoded = group_indices(., factor(OFFERID_ind_new, levels = unique(OFFERID_ind_new))))
   
   #Merge with the corresponding keys and sort on the new keys 
-  key_user <- left_join(key_user, select(X_newind, c("USERID_ind", "new_USERID_ind"))) %>% arrange(new_USERID_ind)
-  key_item <- left_join(key_item, select(G_newind, c("OFFERID_ind", "new_OFFERID_ind"))) %>% arrange(new_OFFERID_ind)
+  key_user <- left_join(key_user, select(X_newind, c("USERID_ind_new", "USERID_recoded"))) %>% arrange(USERID_recoded)
+  key_item <- left_join(key_item, select(G_newind, c("OFFERID_ind_new", "OFFERID_recoded"))) %>% arrange(OFFERID_recoded)
   
   #fill the remaining keys
-  key_user[(nx+1):nu,"new_USERID_ind"]<- (nx+1):nu
-  key_item[(ng+1):ni,"new_OFFERID_ind"]<- (ng+1):ni
+  key_user[(nx+1):nu,"USERID_recoded"]<- (nx+1):nu
+  key_item[(ng+1):ni,"OFFERID_recoded"]<- (ng+1):ni
   
-  #Recode and rename X, G and df with the new keys
-  df <- df %>% left_join(key_user)%>%left_join(key_item) %>% select(-c("USERID_ind", "OFFERID_ind")) %>%
-    rename(USERID_ind = new_USERID_ind) %>% rename(OFFERID_ind = new_OFFERID_ind) %>% select(c("USERID_ind", "OFFERID_ind", "CLICK"))
-  X <- X %>% left_join(key_user) %>%select(-c("USERID_ind")) %>% rename(USERID_ind = new_USERID_ind)
-  G <- G %>% left_join(key_item) %>% select(-c("OFFERID_ind")) %>% rename(OFFERID_ind = new_OFFERID_ind)
+  #Recode and rename X, G and df_train with the new keys
+  df_train <- df_train %>% left_join(key_user)%>%left_join(key_item) %>% select(-c("USERID_ind_new", "OFFERID_ind_new")) %>%
+    rename(USERID_ind_new = USERID_recoded) %>% rename(OFFERID_ind_new = OFFERID_recoded) %>% 
+    select(c("USERID_ind_new", "OFFERID_ind_new", "CLICK"))
+  X <- X %>% left_join(key_user) %>%select(-c("USERID_ind_new")) %>% rename(USERID_ind_new = USERID_recoded)
+  G <- G %>% left_join(key_item) %>% select(-c("OFFERID_ind_new")) %>% rename(OFFERID_ind_new = OFFERID_recoded)
   
   #remove the user and item numbers from X as they are not considered variables, additionally, make full rank
-  X <- select(X, -c("USERID_ind")) %>% make_full_rank()
-  G <- select(G, -c("OFFERID_ind")) %>% make_full_rank()
+  X <- select(X, -c("USERID_ind_new")) %>% make_full_rank()
+  G <- select(G, -c("OFFERID_ind_new")) %>% make_full_rank()
   
   keys$key_user <- key_user
   keys$key_item <- key_item
   
-  return(list("df" = df, "X" = X, "G" = G, "keys" = keys))
+  return(list("df_train" = df_train, "X" = X, "G" = G, "keys" = keys))
+}
+
+recode_results <- function(pars, model, keys){
+  #Extract the keys
+  key_user <- keys$key_user
+  key_item <- keys$key_item
+  
+  #Resort the keys, to reshufle the results to the old keys
+  key_user <- key_user[order(key_user$USERID_ind_new), ]
+  key_item <- key_item[order(key_item$OFFERID_ind_new), ]
+  
+  #Two different recoding criteria, one for full restriction and one for partial restriction
+  if(model == "Full"){
+    alpha <- pars$alpha
+    beta <- pars$beta
+    C_pr <- pars$XC_r
+    D_pr <- pars$GD_r
+  }
+  else{
+    alpha <- pars$alpha
+    beta <- pars$beta
+    C_pr <- pars$C_pr
+    D_pr <- pars$D_pr
+  }
+  
+  #Return correct order of variables
+  return(list("alpha" = alpha[key_user$USERID_recoded], "beta" = beta[key_item$OFFERID_recoded], 
+              "C_pr" = C_pr[key_user$USERID_recoded,], "D_pr" = D_pr[key_item$OFFERID_recoded,]))
 }
 
 #' Gives initial estimates for alpha, beta, C and D
@@ -629,7 +726,7 @@ formatdfXG <- function(df, X, G){
 #' @return initial estimates of alpha, beta, C_r and D_r
 #'
 initChoose_rest <- function(df, X, G, factors, lambda, a_in = NULL, b_in = NULL,
-                            XC_r_in = NULL, GD_r_in = NULL, C_in = NULL, D_in =NULL){
+                            C_r_in = NULL, D_r_in = NULL, C_in = NULL, D_in =NULL){
   nu <- max(df[ ,"USERID_ind"])
   ni <- max(df[ ,"OFFERID_ind"])
   nx <- nrow(X)
@@ -657,7 +754,8 @@ initChoose_rest <- function(df, X, G, factors, lambda, a_in = NULL, b_in = NULL,
   GD_r <- matrix(rnorm(ng * factors, 0, 1/lambda), ng, factors)
   C <- matrix(rnorm((nu-nx) * factors, 0, 1/lambda), nu-nx, factors)
   D <- matrix(rnorm((ni-ng) * factors, 0, 1/lambda), ni-ng, factors)
-  
+  C_r <- NULL
+  D_r <- NULL
   
   # If a specific input for alpha, beta C_r or D_r is given then overwrite
   if (!is.null(a_in)){
@@ -666,11 +764,11 @@ initChoose_rest <- function(df, X, G, factors, lambda, a_in = NULL, b_in = NULL,
   if (!is.null(b_in)){
     beta <- b_in
   }
-  if (!is.null(XC_r_in)){
-    XC_r <- XC_r_in
+  if (!is.null(C_r_in)){
+    C_r <- C_r_in
   }
-  if (!is.null(GD_r_in)){
-    GD_r <- GD_r_in
+  if (!is.null(D_r_in)){
+    D_r <- D_r_in
   }
   if (!is.null(C_in)){
     C <- C_in
@@ -679,7 +777,7 @@ initChoose_rest <- function(df, X, G, factors, lambda, a_in = NULL, b_in = NULL,
     D <- D_in
   }
   
-  output <- list("alpha" = alpha, "beta" = beta, "XC_r" = XC_r, "GD_r" = GD_r, "C" = C, "D" = D)
+  output <- list("alpha" = alpha, "beta" = beta, "C_r" = C_r, "D_r" = D_r, "C" = C, "D" = D, "XC_r" = XC_r, "GD_r" = GD_r)
   return(output)
 }
 
@@ -698,19 +796,30 @@ initChoose_rest <- function(df, X, G, factors, lambda, a_in = NULL, b_in = NULL,
 #' @export
 #'
 #' @examples
-ParEst_rest_fullrest <- function(df, X, G, factors, lambda, iter, iter_CD, epsilon, llh, time){
+ParEst_rest_fullrest <- function(df, X, G, factors, lambda, iter, iter_CD, epsilon, llh, time, a_in = NULL, b_in = NULL
+                                 , C_r_in = NULL, D_r_in = NULL){
   names(df) <- c("USERID_ind", "OFFERID_ind", "CLICK")
   
   # Initialization of parameters
-  initPars <- initChoose_rest(df, X, G, factors, lambda)
+  initPars <- initChoose_rest(df, X, G, factors, lambda, a_in, b_in, C_r_in, D_r_in)
   
   #Center required parameters for identification
   alpha <- initPars$alpha
   beta <- scale(initPars$beta, scale = FALSE)
   X <- scale(X, scale = FALSE)
   G <- scale(G, scale = FALSE)
-  C_r <- initPars$C_r
-  D_r <- initPars$D_r
+  if(is.null(C_r_in)){
+    XC_r <- scale(initPars$XC_r, scale = F)
+    GD_r <- scale(initPars$GD_r, scale = F)
+    C_r <- initPars$C_r
+    D_r <- initPars$D_r
+  }
+  else{
+    C_r <- initPars$C_r
+    D_r <- initPars$D_r
+    XC_r <- X%*%C_r
+    GD_r <- G%*%D_r
+  }
   
   df <- as.matrix(df)
   
@@ -728,7 +837,8 @@ ParEst_rest_fullrest <- function(df, X, G, factors, lambda, iter, iter_CD, epsil
   XprimeX <- t(X)%*%X
   XprimXminhalf <- expm::sqrtm(Matrix::solve(XprimeX))
   GprimGminhalf <- expm::sqrtm(Matrix::solve(GprimeG))
-  
+  XprimXhalf <- expm::sqrtm(XprimeX)
+  GprimGhalf <- expm::sqrtm(GprimeG)
   
   #Calculate Z, the sparse matrix
   #Retrieve indices for y=1 and y=0 from the input data
@@ -738,21 +848,28 @@ ParEst_rest_fullrest <- function(df, X, G, factors, lambda, iter, iter_CD, epsil
   df1 <- cbind(y1, "deriv" = NA)
   df0 <- cbind(y0, "deriv" = NA)
   
-  if(llh){
+  if (llh) {
     # Keeping track of likelihoods
     logllh_all <- rep(NA, (iter+1))
+  } else {
+    logllh_all <- NA
   }
+  
   if(time){
     # Keeping track of time
     tic.clearlog()
+  } else {
+    timings <- NA
   }
   
-  run <- 0
+  run <- 1
   while(run<=iter){
     tic("time of an iteration")
     #define usefull matrixes
-    XC_r <- X%*%C_r
-    GD_r <- G%*%D_r
+    if(run>1){
+      XC_r <- X%*%C_r
+      GD_r <- G%*%D_r
+    }
     
     #Retrieve the gamma only for y1 and y0
     gamma_y1 <- get_gamma0(y1[,1], y1[,2], alpha, beta, XC_r, GD_r)
@@ -764,7 +881,7 @@ ParEst_rest_fullrest <- function(df, X, G, factors, lambda, iter, iter_CD, epsil
       (lambda / 2) * norm(XC_r, type = "F") ^ 2 + lambda / 2 * norm(GD_r, type = "F") ^ 2
     print(logllh_new)
     #check if the algorithm has reached the convergence criteria epsilon
-    if(run>0){
+    if(run>1){
       if(!is.null(epsilon)){
         decrease <- abs((logllh_new-logllh_old)/logllh_old)
         cat("Decrease in logllh: ", decrease, "\n")
@@ -776,7 +893,7 @@ ParEst_rest_fullrest <- function(df, X, G, factors, lambda, iter, iter_CD, epsil
     
     if (llh) {
       # Calculate log likelihood
-      logllh_all[run+1] <- logllh_new
+      logllh_all[run] <- logllh
     }
     
     #Calculate respective first derivatives for both y=1 and y=0
@@ -819,7 +936,12 @@ ParEst_rest_fullrest <- function(df, X, G, factors, lambda, iter, iter_CD, epsil
     
     #Calculate common matrices for efficiency
     GZX <- GprimGminhalf%*%t(G)%*%t(Z)%*%X%*%XprimXminhalf
-    GGDCXX <- GprimGminhalf%*%GprimeG%*%D_r%*%t(C_r)%*%XprimeX%*%XprimXminhalf
+    if(run>1){
+      GGDCXX <- GprimGhalf%*%D_r%*%t(C_r)%*%XprimXhalf
+    }
+    else{
+      GGDCXX <- GprimGminhalf%*%t(G)%*%GD_r%*%t(XC_r)%*%X%*%XprimXminhalf
+    }
     
     #test if objective function decreases
     #low_rankD <- cbind(GD_r, rep(1,ni), beta - colMeans(H_slr_rowmean))
@@ -880,40 +1002,44 @@ ParEst_rest_fullrest <- function(df, X, G, factors, lambda, iter, iter_CD, epsil
     timings <- unlist(lapply(log.lst, function(x) x$toc - x$tic))
   }
   
-  output <- list("alpha" = alpha, "beta" = beta, "C_r" = C_r, "D_r" = D_r, loglh = logllh_all, time = timings)
+  output <- list("alpha" = alpha, "beta" = beta,"XC_r" = XC_r, "GD_r" = GD_r, "C_r" = C_r, "D_r" = D_r, 
+                 "logllh" = logllh_all[1:run], "time" = timings, "run" = run)
   
   return(output)
 }
 
-#' Parameter estimation with a restricted solution
-#'
-#' @param df Clicks of the user
-#' @param user Additional user data
-#' @param item Additional item data
-#' @param factors Amount of factors in the SVD
-#' @param lambda Lambda used
-#' @param iter Amount of iterations until convergence
-#' @param iter_CD Max iterations for finding C and D
-#' @param epsilon stop algorithm when log likelihood converged to epsilon (or max iter)
-#'
-#' @return
-#' @export
-#'
-#' @examples
-ParEst_rest_parrest_SVD <- function(df, X, G, factors, lambda, iter, iter_CD, epsilon, llh, time){
+
+ParEst_rest_parrest_SVD <- function(df, X, G, factors, lambda, iter, iter_CD, epsilon, llh, time, a_in = NULL, b_in= NULL, 
+                                    C_r_in= NULL, D_r_in= NULL, D_in= NULL, C_in= NULL){
   names(df) <- c("USERID_ind", "OFFERID_ind", "CLICK")
   
   # Initialization of parameters
-  initPars <- initChoose_rest(df, X, G, factors, lambda)
+  initPars <- initChoose_rest(df, X, G, factors, lambda, a_in, b_in, C_r_in, D_r_in, C_in, D_in)
+  
   #Center required parameters for identification
   alpha <- initPars$alpha
   beta <- scale(initPars$beta, scale = FALSE)
   X <- scale(X, scale = FALSE)
   G <- scale(G, scale = FALSE)
-  XC_r <- scale(initPars$XC_r, scale = F)
-  GD_r <- scale(initPars$GD_r, scale = F)
-  C <- scale(initPars$C, scale = F)
-  D <- scale(initPars$D, scale = F)
+  
+  #If no warm start, extract variables
+  if(is.null(C_r_in)){
+    XC_r <- scale(initPars$XC_r, scale = F)
+    GD_r <- scale(initPars$GD_r, scale = F)
+    C <- scale(initPars$C, scale = F)
+    D <- scale(initPars$D, scale = F)
+    C_r <- initPars$C_r
+    D_r <- initPars$D_r
+  }
+  #if warm start, extract old variables
+  else{
+    C_r <- initPars$C_r
+    D_r <- initPars$D_r
+    XC_r <- X%*%C_r
+    GD_r <- G%*%D_r
+    C <- initPars$C
+    D <- initPars$D
+  }
   
   df <- as.matrix(df)
   #Initialization of parameters
@@ -924,10 +1050,6 @@ ParEst_rest_parrest_SVD <- function(df, X, G, factors, lambda, iter, iter_CD, ep
   dx <- ncol(X)
   dg <- ncol(G)
   logllh_old <- NULL
-  
-  #Initialize both C_r and D_r seperately (needed in Algorithm 5) as empty matrix
-  C_r = matrix(0, nrow = dx, ncol = factors)
-  D_r = matrix(0, nrow = dg, ncol = factors)
   
   #some memmory stored usefull matrices
   GprimeG <- t(G)%*%G
@@ -978,23 +1100,28 @@ ParEst_rest_parrest_SVD <- function(df, X, G, factors, lambda, iter, iter_CD, ep
   df0_21 <- cbind(y0_21, "deriv" = NA)
   df0_22 <- cbind(y0_22, "deriv" = NA)
   
-  if(llh){
+  if (llh) {
     # Keeping track of likelihoods
     logllh_all <- rep(NA, (iter+1))
+  } else {
+    logllh_all <- NA
   }
+  
   if(time){
     # Keeping track of time
     tic.clearlog()
+  } else {
+    timings <- NA
   }
   
   
-  run <- 0
+  run <- 1
   while(run<=iter){
     #define usefull matrixes
     tic("time of an iteration")
-    if(run == 0){
-      C_r <- matrix(0, dx, factors)
-      D_r <- matrix(0, dg, factors)
+    if(run == 1){
+      C_r <- NULL
+      D_r <- NULL
     }
     else{
       XC_r <- X%*%C_r
@@ -1027,8 +1154,9 @@ ParEst_rest_parrest_SVD <- function(df, X, G, factors, lambda, iter, iter_CD, ep
     logllh_new <- logllh +
       (lambda / 2) * norm(C_pr, type = "F") ^ 2 + lambda / 2 * norm(D_pr, type = "F") ^ 2
     cat("Log likelihood value iteration ", run,": ", logllh_new, "\n")
+    
     #check if the algorithm has reached the convergence criteria epsilon
-    if(run>0){
+    if(run>1){
       if(!is.null(epsilon)){
         change <- abs((logllh_new-logllh_old)/logllh_old)
         cat("*****Change in logllh: ", change,"*****","\n")
@@ -1040,9 +1168,8 @@ ParEst_rest_parrest_SVD <- function(df, X, G, factors, lambda, iter, iter_CD, ep
     
     if (llh) {
       # Calculate log likelihood
-      logllh_all[run+1] <- logllh_new
+      logllh_all[run] <- logllh
     }
-    
     
     #Calculate respective first derivatives for both y=1 and y=0
     df1_11[,"deriv"] <- -4 * derf1(gamma_y1_11)
@@ -1105,20 +1232,7 @@ ParEst_rest_parrest_SVD <- function(df, X, G, factors, lambda, iter, iter_CD, ep
     newbeta_1 <- (nx*colMeans(H_slr_rowmean_11)+(nu-nx)*colMeans(H_slr_rowmean_21))/nu
     newbeta_2 <- (nx*colMeans(H_slr_rowmean_12)+(nu-nx)*colMeans(H_slr_rowmean_22))/nu
     
-    #Calculate matrices invariant in the iterations 
-    if (run == 0){
-      GminhalfGZXXminhalf <- GprimGminhalfGprim %*%t(Z_11)%*%XXprimXminhalf
-      GD_pr = rbind(GprimeGminhalf%*%t(G)%*%GD_r, D)
-      XC_pr = rbind(XprimeXminhalf%&%t(X)%*%XC_r, C)
-    }
-    else{
-      GminhalfGZXXminhalf <- GprimGminhalfGprim %*%t(Z_11)%*%XXprimXminhalf
-      GD_pr = rbind(GprimeGhalf%*%D_r, D)
-      XC_pr = rbind(XprimeXhalf%&%C_r, C)
-    }
-    
-    GD_prXC_pr = GD_pr%*%t(XC_pr)
-    
+    #Start updating for C_pr and D_pr
     #Define variables of first iteration
     V_pr <- matrix(rnorm((dg+(ni-ng))*factors), dg+(ni-ng), factors)
     V_pr <- svd(V_pr)$u
@@ -1136,29 +1250,24 @@ ParEst_rest_parrest_SVD <- function(df, X, G, factors, lambda, iter, iter_CD, ep
     U_r = U_pr[(1:dx),(1:ncol(U_pr))]
     U = U_pr[((dx+1):nrow(U_pr)),(1:ncol(U_pr))]
     
-    #test if objective function decreases
-    #Z <- sparseMatrix(i = (df01[ ,"USERID_ind"]), j = (df01[ ,"OFFERID_ind"]),
-    #x = df01[ ,"deriv"], dims = c(nu, ni))
-    
-    #Calculating the H matrix for alpha update
-    #cat("objective function", (1/8)*norm(Z, type = "F")^2 + (lambda/2)*norm(D_pr, type = "F")^2+ (lambda/2)*norm(C_pr, type = "F")^2,"\n")
-    
-    
-    #low_rankD <- cbind(GD_r, rep(1,ni), beta - colMeans(H_slr_rowmean))
-    #cat("regularized majorized value equation (47) + regularization: ", (1/8)*norm(Z, type = "F")^2 +(lambda/2)*(norm(XC_r, type = "F")^2+norm(GD_r, type = "F")^2), "\n")
-    #H_test <- Z + low_rankC%*%t(low_rankD)
+    #Calculate matrices invariant in the iterations 
+    Xi_11 <- GprimGminhalfGprim%*%t(Z_11)%*%XXprimXminhalf + GprimGminhalfGprim%*%GD_r%*%t(XC_r)%*%XXprimXminhalf
+    Xi_12 <- t(scale(t(GprimGminhalfGprim%*%t(Z_21)), scale = FALSE))+GprimGminhalfGprim%*%GD_r%*%t(C)
+    Xi_21 <- scale(t(Z_12)%*%XXprimXminhalf, scale = FALSE)+D%*%t(XC_r)%*%XXprimXminhalf
+    Xi_22_withoutZ <- D%*%t(C)
     
     #Initialize convergence criterion matrices:
     iteration_CD <- 0
     while(iteration_CD<iter_CD){
-      #cat("Iter: ", iteration_CD, "\n")
       #Update U
-      if(iteration_CD==0){
-        Uhatsvd <- svd(Phi%*%(cbind(t(V_r)%*%GminhalfGZXXminhalf,t(V)%*%t(Z_22))
-                              + t(V_pr)%*%GD_prXC_pr))
+      if(iteration_CD == 0){
+        VJZJ <- t(scale(t(t(scale(V, scale = F))%*%t(Z_22)), scale = F))
+        Uhatsvd <- svd(Phi%*%cbind(t(V_r)%*%Xi_11+t(V)%*%Xi_21, t(V_r)%*%Xi_12 + VJZJ + t(V)%*%Xi_22_withoutZ))
+        fixed1 <- 0
+        fixed2 <- 0
       }
       else{
-        Uhatsvd <- svd(Phi%*%(Fixedpart1+ Fixedpart2))
+        Uhatsvd <- svd(Phi%*%cbind(fixed1, fixed2))
       }
       U_pr <- Uhatsvd$v%*%t(Uhatsvd$u)
       
@@ -1167,8 +1276,8 @@ ParEst_rest_parrest_SVD <- function(df, X, G, factors, lambda, iter, iter_CD, ep
       U = U_pr[((dx+1):nrow(U_pr)),(1:ncol(U_pr))]
       
       #Update V
-      Vhatsvd <- svd((rbind(GminhalfGZXXminhalf%*%U_r,t(Z_22)%*%U)
-                      + GD_prXC_pr%*%U_pr)%*%Phi)
+      JZJU <- scale(t(Z_22)%*%scale(U, scale = F),scale = F)
+      Vhatsvd <- svd(rbind(Xi_11%*%U_r + Xi_12%*%U, Xi_21%*%U_r + JZJU + Xi_22_withoutZ%*%U))
       V_pr <- Vhatsvd$u%*%t(Vhatsvd$v)
       
       #Split V into V_r and V
@@ -1176,19 +1285,18 @@ ParEst_rest_parrest_SVD <- function(df, X, G, factors, lambda, iter, iter_CD, ep
       V = V_pr[((dg+1):nrow(V_pr)),(1:ncol(V_pr))]
       
       #Update Phi
-      Fixedpart1 <- cbind(t(V_r)%*%GminhalfGZXXminhalf,t(V)%*%t(Z_22))
-      Fixedpart2 <- t(V_pr)%*%GD_prXC_pr
+      VJZJ <- t(scale(t(t(scale(V, scale = F))%*%t(Z_22)), scale = F))
+      fixed1 <- (t(V_r)%*%Xi_11+t(V)%*%Xi_21)
+      fixed2 <- (t(V_r)%*%Xi_12 + VJZJ + t(V)%*%Xi_22_withoutZ)
+      F_tilde <- fixed1%*%U_r + fixed2%*%U
       
-      Ftilde <- (Fixedpart1 + Fixedpart2) %*% U_pr
       for (i in 1:nrow(Phi)){
-        Phi[i,i] <- max((Ftilde[i,i]-4*lambda),0)
+        Phi[i,i] <- max((F_tilde[i,i]-4*lambda),0)
       }
       
       #Check the exit criteria
       if(iteration_CD>1){
         criteria <- abs(((norm(V_pr,type="F")+norm(U_pr,type="F")+norm(Phi,type="F"))-(norm(V_pr_prev,type="F")+norm(U_pr_prev,type="F")+norm(Phi_prev,type="F")))/(norm(V_pr_prev,type="F")+norm(U_pr_prev,type="F")+norm(Phi_prev,type="F")))
-        print(criteria)
-        print(Phi[1,1])
         if(criteria<0.001){
           #cat("Stopped at iteration: ", iteration_CD, "\n")
           break
@@ -1223,10 +1331,12 @@ ParEst_rest_parrest_SVD <- function(df, X, G, factors, lambda, iter, iter_CD, ep
     log.lst <- tic.log(format = FALSE)
     timings <- unlist(lapply(log.lst, function(x) x$toc - x$tic))
   }
-  output <- list("alpha" = alpha, "beta" = beta, "C_pr" = C_pr, "D_pr" = D_pr, loglh = logllh_all, time = timings)
+  output <- list("alpha" = alpha, "beta" = beta, "C_pr" = C_pr, "D_pr" = D_pr,"C_r" = C_r, "D_r" = D_r,
+                 "C" = C, "D" = D, "logllh" = logllh_all[1:run], "time" = timings, "run" = run)
   
   return(output)
 }
+
 
 #' Parameter estimation with a restricted solution
 #'
@@ -1243,20 +1353,37 @@ ParEst_rest_parrest_SVD <- function(df, X, G, factors, lambda, iter, iter_CD, ep
 #' @export
 #'
 #' @examples
-ParEst_rest_parrest_Eigen <- function(df, X, G, factors, lambda, iter, iter_CD, epsilon, llh, time){
+ParEst_rest_parrest_Eigen <- function(df, X, G, factors, lambda, iter, iter_CD, epsilon, llh, time, a_in = NULL, b_in= NULL, 
+                                      C_r_in= NULL, D_r_in= NULL, D_in= NULL, C_in= NULL){
   names(df) <- c("USERID_ind", "OFFERID_ind", "CLICK")
   
   # Initialization of parameters
-  initPars <- initChoose_rest(df, X, G, factors, lambda)
+  initPars <- initChoose_rest(df, X, G, factors, lambda, a_in, b_in, C_r_in, D_r_in, C_in, D_in)
+  
   #Center required parameters for identification
   alpha <- initPars$alpha
   beta <- scale(initPars$beta, scale = FALSE)
   X <- scale(X, scale = FALSE)
   G <- scale(G, scale = FALSE)
-  XC_r <- scale(initPars$XC_r, scale = F)
-  GD_r <- scale(initPars$GD_r, scale = F)
-  C <- scale(initPars$C, scale = F)
-  D <- scale(initPars$D, scale = F)
+  
+  #If no warm start, extract variables
+  if(is.null(C_r_in)){
+    XC_r <- scale(initPars$XC_r, scale = F)
+    GD_r <- scale(initPars$GD_r, scale = F)
+    C <- scale(initPars$C, scale = F)
+    D <- scale(initPars$D, scale = F)
+    C_r <- initPars$C_r
+    D_r <- initPars$D_r
+  }
+  #if warm start, extract old variables
+  else{
+    C_r <- initPars$C_r
+    D_r <- initPars$D_r
+    XC_r <- X%*%C_r
+    GD_r <- G%*%D_r
+    C <- initPars$C
+    D <- initPars$D
+  }
   
   df <- as.matrix(df)
   #Initialization of parameters
@@ -1267,8 +1394,6 @@ ParEst_rest_parrest_Eigen <- function(df, X, G, factors, lambda, iter, iter_CD, 
   dx <- ncol(X)
   dg <- ncol(G)
   logllh_old <- NULL
-  
-  
   
   #Initialize both C_r and D_r seperately (needed in Algorithm 5) as empty matrix
   C_r = matrix(0, nrow = dx, ncol = factors)
@@ -1323,21 +1448,26 @@ ParEst_rest_parrest_Eigen <- function(df, X, G, factors, lambda, iter, iter_CD, 
   df0_21 <- cbind(y0_21, "deriv" = NA)
   df0_22 <- cbind(y0_22, "deriv" = NA)
   
-  if(llh){
+  if (llh) {
     # Keeping track of likelihoods
     logllh_all <- rep(NA, (iter+1))
+  } else {
+    logllh_all <- NA
   }
+  
   if(time){
     # Keeping track of time
     tic.clearlog()
+  } else {
+    timings <- NA
   }
   
   
-  run <- 0
+  run <- 1
   while(run<=iter){
     #define usefull matrixes
     tic("time of an iteration")
-    if(run == 0){
+    if(run == 1){
       C_r <- matrix(0, dx, factors)
       D_r <- matrix(0, dg, factors)
     }
@@ -1373,7 +1503,7 @@ ParEst_rest_parrest_Eigen <- function(df, X, G, factors, lambda, iter, iter_CD, 
       (lambda / 2) * norm(C_pr, type = "F") ^ 2 + lambda / 2 * norm(D_pr, type = "F") ^ 2
     cat("Log likelihood value iteration ", run,": ", logllh_new, "\n")
     #check if the algorithm has reached the convergence criteria epsilon
-    if(run>0){
+    if(run>1){
       if(!is.null(epsilon)){
         change <- abs((logllh_new-logllh_old)/logllh_old)
         cat("*****Change in logllh: ", change,"*****","\n")
@@ -1385,7 +1515,7 @@ ParEst_rest_parrest_Eigen <- function(df, X, G, factors, lambda, iter, iter_CD, 
     
     if (llh) {
       # Calculate log likelihood
-      logllh_all[run+1] <- logllh_new
+      logllh_all[run] <- logllh
     }
     
     #Calculate respective first derivatives for both y=1 and y=0
@@ -1449,19 +1579,7 @@ ParEst_rest_parrest_Eigen <- function(df, X, G, factors, lambda, iter, iter_CD, 
     newbeta_1 <- (nx*colMeans(H_slr_rowmean_11)+(nu-nx)*colMeans(H_slr_rowmean_21))/nu
     newbeta_2 <- (nx*colMeans(H_slr_rowmean_12)+(nu-nx)*colMeans(H_slr_rowmean_22))/nu
     
-    #Calculate matrices invariant in the iterations 
-    if (run == 0){
-      GminhalfGZXXminhalf <- GprimGminhalfGprim %*%t(Z_11)%*%XXprimXminhalf
-      GD_pr = rbind(GprimeGminhalf%*%t(G)%*%GD_r, D)
-      XC_pr = rbind(XprimeXminhalf%&%t(X)%*%XC_r, C)
-    }
-    else{
-      GminhalfGZXXminhalf <- GprimGminhalfGprim %*%t(Z_11)%*%XXprimXminhalf
-      GD_pr = rbind(GprimeGhalf%*%D_r, D)
-      XC_pr = rbind(XprimeXhalf%&%C_r, C)
-    }
-    
-    GD_prXC_pr = GD_pr%*%t(XC_pr)
+    #Update C_pr and D_pr
     
     #Define variables of first iteration
     V_pr <- matrix(rnorm((dg+(ni-ng))*factors), dg+(ni-ng), factors)
@@ -1480,29 +1598,24 @@ ParEst_rest_parrest_Eigen <- function(df, X, G, factors, lambda, iter, iter_CD, 
     U_r = U_pr[(1:dx),(1:ncol(U_pr))]
     U = U_pr[((dx+1):nrow(U_pr)),(1:ncol(U_pr))]
     
-    #test if objective function decreases
-    #Z <- sparseMatrix(i = (df01[ ,"USERID_ind"]), j = (df01[ ,"OFFERID_ind"]),
-    #x = df01[ ,"deriv"], dims = c(nu, ni))
-    
-    #Calculating the H matrix for alpha update
-    #cat("objective function", (1/8)*norm(Z, type = "F")^2 + (lambda/2)*norm(D_pr, type = "F")^2+ (lambda/2)*norm(C_pr, type = "F")^2,"\n")
-    
-    
-    #low_rankD <- cbind(GD_r, rep(1,ni), beta - colMeans(H_slr_rowmean))
-    #cat("regularized majorized value equation (47) + regularization: ", (1/8)*norm(Z, type = "F")^2 +(lambda/2)*(norm(XC_r, type = "F")^2+norm(GD_r, type = "F")^2), "\n")
-    #H_test <- Z + low_rankC%*%t(low_rankD)
+    #Calculate matrices invariant in the iterations 
+    Xi_11 <- GprimGminhalfGprim%*%t(Z_11)%*%XXprimXminhalf + GprimGminhalfGprim%*%GD_r%*%t(XC_r)%*%XXprimXminhalf
+    Xi_12 <- t(scale(t(GprimGminhalfGprim%*%t(Z_21)), scale = FALSE))+GprimGminhalfGprim%*%GD_r%*%t(C)
+    Xi_21 <- scale(t(Z_12)%*%XXprimXminhalf, scale = FALSE)+D%*%t(XC_r)%*%XXprimXminhalf
+    Xi_22_withoutZ <- D%*%t(C)
     
     #Initialize convergence criterion matrices:
     iteration_CD <- 0
     while(iteration_CD<iter_CD){
-      #cat("Iter: ", iteration_CD, "\n")
       #Update U
-      if(iteration_CD==0){
-        F_1 <- Phi%*%(cbind(t(V_r)%*%GminhalfGZXXminhalf,t(V)%*%t(Z_22))
-                      + t(V_pr)%*%GD_prXC_pr)
+      if(iteration_CD == 0){
+        VJZJ <- t(scale(t(t(scale(V, scale = F))%*%t(Z_22)), scale = F))
+        F_1 <- Phi%*%cbind(t(V_r)%*%Xi_11+t(V)%*%Xi_21, t(V_r)%*%Xi_12 + VJZJ + t(V)%*%Xi_22_withoutZ)
+        fixed1 <- 0
+        fixed2 <- 0
       }
       else{
-        F_1 <- Phi%*%(Fixedpart1+ Fixedpart2)
+        F_1 <- Phi%*%cbind(fixed1, fixed2)
       }
       F_1F_1trans <- F_1%*%t(F_1)
       Uhateigen <- eigen(F_1F_1trans)
@@ -1514,7 +1627,8 @@ ParEst_rest_parrest_Eigen <- function(df, X, G, factors, lambda, iter, iter_CD, 
       U = U_pr[((dx+1):nrow(U_pr)),(1:ncol(U_pr))]
       
       #Update V
-      F_2 <- (rbind(GminhalfGZXXminhalf%*%U_r,t(Z_22)%*%U) + GD_prXC_pr%*%U_pr)%*%Phi
+      JZJU <- scale(t(Z_22)%*%scale(U, scale = F), scale = F)
+      F_2 <- rbind(Xi_11%*%U_r + Xi_12%*%U, Xi_21%*%U_r + JZJU + Xi_22_withoutZ%*%U)
       F_2transF_2 <- t(F_2)%*%F_2
       Vhateigen <- eigen(F_2transF_2)
       P <- F_2%*%Vhateigen$vectors%*%solve(sqrt(diag(Vhateigen$values)))
@@ -1525,19 +1639,18 @@ ParEst_rest_parrest_Eigen <- function(df, X, G, factors, lambda, iter, iter_CD, 
       V = V_pr[((dg+1):nrow(V_pr)),(1:ncol(V_pr))]
       
       #Update Phi
-      Fixedpart1 <- cbind(t(V_r)%*%GminhalfGZXXminhalf,t(V)%*%t(Z_22))
-      Fixedpart2 <- t(V_pr)%*%GD_prXC_pr
+      VJZJ <- t(scale(t(t(scale(V, scale = F))%*%t(Z_22)), scale = F))
+      fixed1 <- (t(V_r)%*%Xi_11+t(V)%*%Xi_21)
+      fixed2 <- (t(V_r)%*%Xi_12 + VJZJ + t(V)%*%Xi_22_withoutZ)
+      F_tilde <- fixed1%*%U_r + fixed2%*%U
       
-      Ftilde <- (Fixedpart1 + Fixedpart2) %*% U_pr
       for (i in 1:nrow(Phi)){
-        Phi[i,i] <- max((Ftilde[i,i]-4*lambda),0)
+        Phi[i,i] <- max((F_tilde[i,i]-4*lambda),0)
       }
       
       #Check the exit criteria
       if(iteration_CD>1){
         criteria <- abs(((norm(V_pr,type="F")+norm(U_pr,type="F")+norm(Phi,type="F"))-(norm(V_pr_prev,type="F")+norm(U_pr_prev,type="F")+norm(Phi_prev,type="F")))/(norm(V_pr_prev,type="F")+norm(U_pr_prev,type="F")+norm(Phi_prev,type="F")))
-        print(criteria)
-        print(Phi[1,1])
         if(criteria<0.001){
           #cat("Stopped at iteration: ", iteration_CD, "\n")
           break
@@ -1572,7 +1685,8 @@ ParEst_rest_parrest_Eigen <- function(df, X, G, factors, lambda, iter, iter_CD, 
     log.lst <- tic.log(format = FALSE)
     timings <- unlist(lapply(log.lst, function(x) x$toc - x$tic))
   }
-  output <- list("alpha" = alpha, "beta" = beta, "C_pr" = C_pr, "D_pr" = D_pr, loglh = logllh_all, time = timings)
+  output <- list("alpha" = alpha, "beta" = beta, "C_pr" = C_pr, "D_pr" = D_pr,"C_r" = C_r, "D_r" = D_r,
+                 "C" = C, "D" = D, "logllh" = logllh_all[1:run], "time" = timings, "run" = run)
   return(output)
 }
 
@@ -1592,20 +1706,37 @@ ParEst_rest_parrest_Eigen <- function(df, X, G, factors, lambda, iter, iter_CD, 
 #' @export
 #'
 #' @examples
-ParEst_rest_parrest <- function(df, X, G, factors, lambda, iter, iter_CD, epsilon, llh, time){
+ParEst_rest_parrest_deriv <- function(df, X, G, factors, lambda, iter, iter_CD, epsilon, llh, time, a_in = NULL, b_in= NULL, 
+                                      C_r_in= NULL, D_r_in= NULL, D_in= NULL, C_in= NULL){
   names(df) <- c("USERID_ind", "OFFERID_ind", "CLICK")
   
   # Initialization of parameters
-  initPars <- initChoose_rest(df, X, G, factors, lambda)
+  initPars <- initChoose_rest(df, X, G, factors, lambda, a_in, b_in, C_r_in, D_r_in, C_in, D_in)
+  
   #Center required parameters for identification
   alpha <- initPars$alpha
   beta <- scale(initPars$beta, scale = FALSE)
   X <- scale(X, scale = FALSE)
   G <- scale(G, scale = FALSE)
-  XC_r <- scale(initPars$XC_r, scale = F)
-  GD_r <- scale(initPars$GD_r, scale = F)
-  C <- scale(initPars$C, scale = F)
-  D <- scale(initPars$D, scale = F)
+  
+  #If no warm start, extract variables
+  if(is.null(C_r_in)){
+    XC_r <- scale(initPars$XC_r, scale = F)
+    GD_r <- scale(initPars$GD_r, scale = F)
+    C <- scale(initPars$C, scale = F)
+    D <- scale(initPars$D, scale = F)
+    C_r <- initPars$C_r
+    D_r <- initPars$D_r
+  }
+  #if warm start, extract old variables
+  else{
+    C_r <- initPars$C_r
+    D_r <- initPars$D_r
+    XC_r <- X%*%C_r
+    GD_r <- G%*%D_r
+    C <- initPars$C
+    D <- initPars$D
+  }
   
   df <- as.matrix(df)
   #Initialization of parameters
@@ -1656,20 +1787,25 @@ ParEst_rest_parrest <- function(df, X, G, factors, lambda, iter, iter_CD, epsilo
   df0_21 <- cbind(y0_21, "deriv" = NA)
   df0_22 <- cbind(y0_22, "deriv" = NA)
   
-  if(llh){
+  if (llh) {
     # Keeping track of likelihoods
     logllh_all <- rep(NA, (iter+1))
+  } else {
+    logllh_all <- NA
   }
+  
   if(time){
     # Keeping track of time
     tic.clearlog()
+  } else {
+    timings <- NA
   }
   
-  run <- 0
+  run <- 1
   while(run<=iter){
     #define usefull matrixes
     tic("time of an iteration")
-    if(run == 0){
+    if(run == 1){
       C_r <- matrix(0, dx, factors)
       D_r <- matrix(0, dg, factors)
     }
@@ -1705,7 +1841,7 @@ ParEst_rest_parrest <- function(df, X, G, factors, lambda, iter, iter_CD, epsilo
       (lambda / 2) * norm(C_pr, type = "F") ^ 2 + lambda / 2 * norm(D_pr, type = "F") ^ 2
     cat("Log likelihood value iteration ", run,": ", logllh_new, "\n")
     #check if the algorithm has reached the convergence criteria epsilon
-    if(run>0){
+    if(run>1){
       if(!is.null(epsilon)){
         change <- abs((logllh_new-logllh_old)/logllh_old)
         cat("*****Change in logllh: ", change,"*****","\n")
@@ -1717,7 +1853,7 @@ ParEst_rest_parrest <- function(df, X, G, factors, lambda, iter, iter_CD, epsilo
     
     if (llh) {
       # Calculate log likelihood
-      logllh_all[run+1] <- logllh_new
+      logllh_all[run] <- logllh
     }
     
     #Calculate respective first derivatives for both y=1 and y=0
@@ -1816,18 +1952,6 @@ ParEst_rest_parrest <- function(df, X, G, factors, lambda, iter, iter_CD, epsilo
     XC_r_old <- XC_r
     GD_r_old <- GD_r
     
-    #test if objective function decreases
-    #Z <- sparseMatrix(i = (df01[ ,"USERID_ind"]), j = (df01[ ,"OFFERID_ind"]),
-    #x = df01[ ,"deriv"], dims = c(nu, ni))
-    
-    #Calculating the H matrix for alpha update
-    #cat("objective function", (1/8)*norm(Z, type = "F")^2 + (lambda/2)*norm(D_pr, type = "F")^2+ (lambda/2)*norm(C_pr, type = "F")^2,"\n")
-    
-    
-    #low_rankD <- cbind(GD_r, rep(1,ni), beta - colMeans(H_slr_rowmean))
-    #cat("regularized majorized value equation (47) + regularization: ", (1/8)*norm(Z, type = "F")^2 +(lambda/2)*(norm(XC_r, type = "F")^2+norm(GD_r, type = "F")^2), "\n")
-    #H_test <- Z + low_rankC%*%t(low_rankD)
-    
     #Initialize convergence criterion matrices:
     iteration_CD <- 0
     while(iteration_CD<iter_CD){
@@ -1846,13 +1970,12 @@ ParEst_rest_parrest <- function(df, X, G, factors, lambda, iter, iter_CD, epsilo
       GD_r <- G%*%D_r
       D_pr <- rbind(GD_r, D)
       
-      browser()
       #similar for C
-      C <- (scale(Z_C%*%D_pr, scale = F) +scale(alpha_2 %*% t(colSum(D_pr)), scale = F) + C_old%*%(t(D_pr_old)%*%D_pr))%*%solve(t(D_pr)%*%D_pr+4*lambda*diag(factors))
+      C <- (scale(Z_C%*%D_pr, scale = F) +scale(alpha_2 %*% t(colSums(D_pr)), scale = F) + C_old%*%(t(D_pr_old)%*%D_pr))%*%solve(t(D_pr)%*%D_pr+4*lambda*diag(factors))
       C_pr <- rbind(XC_r, C)
       
       #silmilar for D
-      D <- (scale(t(Z_D)%*%C_pr, scale = F) + scale(beta_2 %*% t(colSum(C_pr)), scale = F)+ D_old%*%(t(C_pr_old)%*%C_pr))%*%solve(t(C_pr)%*%C_pr+4*lambda*diag(factors))
+      D <- (scale(t(Z_D)%*%C_pr, scale = F) + scale(beta_2 %*% t(colSums(C_pr)), scale = F)+ D_old%*%(t(C_pr_old)%*%C_pr))%*%solve(t(C_pr)%*%C_pr+4*lambda*diag(factors))
       D_pr <- rbind(GD_r, D)
       
       #Check the exit criteria
@@ -1888,7 +2011,268 @@ ParEst_rest_parrest <- function(df, X, G, factors, lambda, iter, iter_CD, epsilo
     log.lst <- tic.log(format = FALSE)
     timings <- unlist(lapply(log.lst, function(x) x$toc - x$tic))
   }
-  output <- list("alpha" = alpha, "beta" = beta, "C_pr" = C_pr, "D_pr" = D_pr, loglh = logllh_all, time = timings)
+  output <- list("alpha" = alpha, "beta" = beta, "C_pr" = C_pr, "D_pr" = D_pr,"C_r" = C_r, "D_r" = D_r,
+                 "C" = C, "D" = D, "logllh" = logllh_all[1:run], "time" = timings, "run" = run)
+  return(output)
+}
+
+getPredict_thes <- function(df_test, alpha, beta, C_pr, D_pr){
+  names(df_test) <- c("USERID_ind", "OFFERID_ind", "CLICK", "ratioU", "ratioO", "prediction")
+  
+  # By using the size of C and D, we can infer which obs are missing in training
+  maxU <- nrow(C_pr)
+  maxI <- nrow(D_pr)
+  
+  # Marking offer/items that are non existent in the training set
+  df_test$nonMiss <- ((df_test[ ,"USERID_ind"]  <= maxU) & (df_test[ ,"OFFERID_ind"] <= maxI))
+  
+  # Predciting for the non missing obs
+  # Get the non missing indices
+  nonMiss <- as.matrix(df_test[df_test$nonMiss, c("USERID_ind", "OFFERID_ind")])
+  
+  # Calculating gamma
+  gamma <- get_gamma0(nonMiss[,1], nonMiss[,2], alpha, beta, C_pr, D_pr)
+  
+  # And predict using the llh function and gamma
+  df_test$prediction[df_test$nonMiss] <- mu(gamma)
+  
+  return(df_test)
+}
+
+fullAlg_rest <- function(df_train, X, G, df_test, factors, lambda, iter, iter_CD, initType, method_name, llh = F, 
+                         time = F, epsilon=NULL, a_in = NULL, b_in = NULL, C_in = NULL, D_in = NULL, 
+                         C_r_in = NULL, D_r_in = NULL){
+  # Format the train, X and G matrices
+  tic("1. Format the train, X and G matrices")
+  prelim <- formatdfXG(df_train, X, G)
+  df_train <- prelim$df_train[ ,c("USERID_ind_new", "OFFERID_ind_new", "CLICK")]
+  X <- prelim$X
+  G <- prelim$G
+  
+  # Estimating parameters
+  if(method_name == "Full"){
+    tic("2. Estimating parameters")
+    pars <- ParEst_rest_fullrest(df_train, X, G, factors, lambda, iter, iter_CD, epsilon, llh, time, a_in, 
+                                 b_in , C_r_in, D_r_in)
+    toc()
+  }
+  else if(method_name == "SVD"){
+    tic("2. Estimating parameters")
+    pars <- ParEst_rest_parrest_SVD(df_train, X, G, factors, lambda, iter, iter_CD, epsilon, llh, time, a_in, b_in, 
+                                    C_r_in, D_r_in, D_in, C_in)
+    toc()
+  }
+  else if(method_name == "Eigen"){
+    tic("2. Estimating parameters")
+    pars <- ParEst_rest_parrest_Eigen(df_train, X, G, factors, lambda, iter, iter_CD, epsilon, llh, time, a_in, b_in, 
+                                      C_r_in, D_r_in, D_in, C_in)
+    toc()
+  }
+  else if(method_name == "Deriv"){
+    tic("2. Estimating parameters")
+    pars <- ParEst_rest_parrest_deriv(df_train, X, G, factors, lambda, iter, iter_CD, epsilon, llh, time, a_in, b_in, 
+                                      C_r_in, D_r_in, D_in, C_in)
+    toc()
+  }
+  
+  # Getting predictions
+  tic("3. Getting predictions")
+  #Recode parameters
+  newpars <- recode_results(pars, method_name, prelim$keys)
+  results <- getPredict_thes(df_test[ ,c("USERID_ind_new", "OFFERID_ind_new", "CLICK",
+                                         "ratioU", "ratioO", "prediction")], 
+                             newpars$alpha, newpars$beta, newpars$C_pr, newpars$D_pr)
+  toc()
+  
+  # Performance metrics
+  # What to do with the NANs (some majority rule)
+  results$prediction[is.na(results$prediction)] <- 0
+  
+  # RMSE
+  RMSE <- sqrt(mean((results$prediction - results$CLICK)^2))
+  
+  #Calculate MPR
+  results <- results %>% group_by(USERID_ind) %>% mutate("perc_rank" = rank(1-prediction)/n())
+  MPR <- sum(results$CLICK*results$perc_rank)/sum(results$CLICK)
+  
+  # Calculate confusion matrix
+  threshold <- 0.02191325 # average click rate
+  results$predictionBin <- rep(0, length(results$prediction))
+  results$predictionBin[results$prediction > threshold] <- 1
+  
+  # True positives:
+  TP <- sum(results$predictionBin == 1 & results$CLICK == 1)
+  TN <- sum(results$predictionBin == 0 & results$CLICK == 0)
+  FP <- sum(results$predictionBin == 1 & results$CLICK == 0)
+  FN <- sum(results$predictionBin == 0 & results$CLICK == 1)
+  
+  confusion <- list("TP" = TP, "TN" = TN, "FP" = FP, "FN" = FN)
+  
+  # Output
+  output <- list("parameters" = pars, "prediction" = results, "MPR" = MPR, "RMSE" = RMSE,
+                 "confusion" = confusion)
+  return(output)
+}
+
+baselinePred_mpr <- function(df_train, df_test){
+  
+  # initialize column with majority
+  df_test$predUser <- 0
+  df_test$predOffer <- 0
+  df_test$predOverall <- mean(df_train$CLICK)
+  df_test$predMajority <- 0
+  
+  # Fill in predictions where available
+  df_test$predUser <- df_test$ratioU[!is.na(df_test$ratioU)]
+  df_test$predOffer <- df_test$ratioO[!is.na(df_test$ratioO)]
+  
+  df_test <- df_test %>% group_by(USERID_ind_new) %>% mutate("perc_rank_predUser" = rank(1-predUser)/n(), 
+                                                             "perc_rank_predOffer" = rank(1-predOffer)/n(),
+                                                             "perc_rank_predOverall" = rank(1-predOverall)/n(),
+                                                             "perc_rank_predMajority" = rank(1-predMajority)/n())
+  
+  MPRUser <- sum(df_test$CLICK*df_test$perc_rank_predUser)/sum(df_test$CLICK)
+  MPROffer <- sum(df_test$CLICK*df_test$perc_rank_predOffer)/sum(df_test$CLICK)
+  MPROverall <- sum(df_test$CLICK*df_test$perc_rank_predOverall)/sum(df_test$CLICK)
+  MPRMajority <- sum(df_test$CLICK*df_test$perc_rank_predMajority)/sum(df_test$CLICK)
+  
+  output <- list("df_test" = df_test, "MPRUser" = MPRUser, "MPROffer" = MPROffer, 
+                 "MPROverall" = MPROverall, "MPRMajority" = MPRMajority)
   
   return(output)
+}
+
+crossValidate_thes <- function(df, X, G, FACTORS, LAMBDA, INITTYPE, ONLYVAR, folds, iter, iter_CD, method_name,
+                               epsilon, warm){
+  
+  # Initialize a multidimensional output array
+  # Rows are all the possible permutations of the huperparameters * folds
+  rows <- (length(ONLYVAR) * length(FACTORS) * length(LAMBDA) * length(INITTYPE)) * folds
+  
+  # Columns for the hyperparameters, plus a name variable, and then all the results you want
+  # these are: rmse, TP (true positive(1)), TN, FP, FN, number of iterations, best baseline, epsilon
+  columns <- 11
+  
+  # Initialize the df (depth is the number of folds)
+  CVoutput <- data.frame(matrix(NA, nrow = rows, ncol = columns))
+  names(CVoutput) <- c("Epsilon", "Specification",
+                       "MPR","RMSE", "TP", "TN", "FP", "FN", "Iter", "rmseUser", "DifferenceRMSE")
+  
+  # Now we loop
+  # First we make the folds
+  # Randomly shuffle the data
+  df <- df[sample(nrow(df)), ]
+  
+  # Then assign fold indices
+  foldInd <- cut(seq(1, nrow(df)), breaks = folds, labels = FALSE)
+  
+  row <- 1
+  # Looping over your folds
+  for (z in 1:folds){
+    # Do onlyvar first because the train test split depends on it
+    for (a in 1:length(ONLYVAR)){
+      # Do onlyvar first because the train test split depends on it
+      onlyVar <- ONLYVAR[a]
+      
+      # Make the train test split by using the foldInd and fold as input (see trainTest)
+      split <- trainTest_thes(df,X, G, onlyVar, cv = TRUE, ind = foldInd, fold = z)
+      df_train <-split$df_train[ ,c("USERID_ind_new", "OFFERID_ind_new", "CLICK")]
+      df_test <- split$df_test
+      
+      # Loop the other hyperparameters
+      
+      for (b in 1:length(FACTORS)){
+        # Initialize the warm start objects (can only be used within a certain factor size)
+        a_in <- NULL
+        b_in <- NULL
+        C_in <- NULL
+        D_in <- NULL
+        C_r_in <- NULL
+        D_r_in <- NULL
+        
+        for (c in 1:length(LAMBDA)){
+          for (d in 1:length(INITTYPE)){
+            tic(paste("Run", row, "out of", rows, "in fold", z, "out of ", folds))
+            factors <- FACTORS[b]
+            lambda <- LAMBDA[c]
+            initType <- INITTYPE[d]
+            
+            # Run the algorithm
+            if(method_name == "Eigen"){
+              output <- try(fullAlg_rest(df_train, X, G, df_test, factors, lambda, iter, iter_CD, initType, method_name, 
+                                         epsilon = epsilon, a_in=a_in, b_in=b_in, C_in=C_in, D_in=D_in, C_r_in = C_r_in,
+                                         D_r_in = D_r_in))
+              if (class(output) == 'try-error') {
+                cat('Eigen method failed')
+                output <- list()
+                output$MPR <- NA
+                output$RMSE <- NA
+                output$TP <- NA
+                output$TN <- NA
+                output$FP <- NA
+                output$FN <- NA
+                output$parameters$run <- NA
+              }
+            }
+            else{
+              output <- fullAlg_rest(df_train, X, G, df_test, factors, lambda, iter, iter_CD, initType, method_name, 
+                                     epsilon = epsilon, a_in=a_in, b_in=b_in, C_in=C_in, D_in=D_in, C_r_in = C_r_in,
+                                     D_r_in = D_r_in)
+            }
+            
+            
+            
+            # Fill the array with output
+            CVoutput$Epsilon[row] <- epsilon
+            
+            # The name
+            CVoutput$Specification[row] <- paste("Method name = ", method_name, ", Factor = ", factors, ", Lambda = ", lambda, 
+                                                 ", initType = ", initType, ", onlyVar = ", onlyVar,
+                                                 ", warm = ", warm, sep = "")
+            
+            # Performance variables
+            CVoutput$MPR[row] <- output$MPR
+            CVoutput$RMSE[row] <- output$RMSE
+            CVoutput$TP[row] <- output$confusion$TP
+            CVoutput$TN[row] <- output$confusion$TN
+            CVoutput$FP[row] <- output$confusion$FP
+            CVoutput$FN[row] <- output$confusion$FN
+            CVoutput$Iter[row] <- output$parameters$run
+            CVoutput$rmseUser[row] <- baselinePred(df_train, df_test)$rmseUser
+            CVoutput$DifferenceRMSE[row] <- CVoutput$RMSE[row]-CVoutput$rmseUser[row]
+            
+            row <- row+1
+            
+            #If the output was an error, skip paramamter updates (as no updates available)
+            if (class(output) == 'try-error') {
+              next
+            }
+            
+            # In case of warm starts, keep track of the last parameters
+            if (warm){
+              a_in <- output$parameters$alpha
+              b_in <- output$parameters$beta
+              C_r_in <- output$parameters$C_r
+              D_r_in <- output$parameters$D_r
+              if (method_name != "Old"){
+                C_in <- output$parameters$C
+                D_in <- output$parameters$D
+              }
+            }
+            
+            toc()
+            
+            
+          }
+        }
+      }
+    }
+  }
+  
+  # Create a mean table
+  CVmean <- CVoutput %>% 
+    group_by(Epsilon, Specification) %>%
+    summarise_all(mean)
+  
+  return(list("CVoutput" = CVoutput, "CVmean" = CVmean))
 }
