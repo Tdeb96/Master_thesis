@@ -13,15 +13,33 @@ source("Thesis_methods.R")
 
 #Timing experiments-------
 
-Simulation <- function(n, i, dx, dg, factors, sparsity, unknown, lambda,f, epsilon){
+#' Get data function to simulate a dataset
+#'
+#' @param n various input parameters for the model
+#' @param i 
+#' @param dx 
+#' @param dg 
+#' @param factors 
+#' @param sparsity 
+#' @param unknown 
+#' @param lambda 
+#' @param f 
+#' @param epsilon 
+#'
+#' @return List with datasets
+#' @export
+#'
+#' @examples
+Get_data <- function(n, i, dx, dg, factors, sparsity, unknown, lambda,f, epsilon){
   alpha <- runif(n, min=-5, max=0)
   beta <- runif(i, min=-5, max=0)
   X <- matrix(rnorm(n * dx, 0, 1), n, dx)
   G <-  matrix(rnorm(i * dg, 0, 1), i, dg)
   C <- matrix(rnorm(dx * factors, 0, 0.1), dx, factors)
   D <- matrix(rnorm(dg * factors, 0, 0.1), dg, factors)
-  varepsilon <- matrix(rnorm(n*i, 0, 1), n, i)
-  gamma <- alpha%*%t(rep(1,i)) + rep(1,n)%*%t(beta) + X%*%C %*% t(D)%*%t(G) + varepsilon
+  low_rankC <- cbind(X%*%C, alpha, rep(1, n))
+  low_rankD <- cbind(G%*%D, rep(1,i), beta)
+  gamma <- low_rankC %*% t(low_rankD) + matrix(rnorm(n*i, 0, 1), n, i)
   probability <- exp(gamma) / (1 + exp(gamma))
   
   # Create a train subset with a certain sparsity level
@@ -57,11 +75,35 @@ Simulation <- function(n, i, dx, dg, factors, sparsity, unknown, lambda,f, epsil
   X <- prelim$X
   G <- prelim$G
   
+  return(list(df = df, X=X, G=G))
+}
+
+#' Simulates and returns full sets of data
+#'
+#' @param n 
+#' @param i 
+#' @param dx 
+#' @param dg 
+#' @param factors 
+#' @param sparsity 
+#' @param unknown 
+#' @param lambda 
+#' @param f 
+#' @param epsilon 
+#'
+#' @return
+#' @export
+#'
+#' @examples
+Simulation <- function(n, i, dx, dg, factors, sparsity, unknown, lambda,f, epsilon){
+  data <- Get_data(n, i, dx, dg, factors, sparsity, unknown, lambda,f, epsilon)
+  df <- data$df
+  X <- data$X
+  G <- data$G
+  
   #Estimate all methods on the dataset
-  factors <- f
-  lambda <- lambda
-  iter <- 10000
-  iter_CD <- 10000
+  iter <- 1000
+  iter_CD <- 50
   cat("--------------", "Running old model", "--------------", '\n')
   results_old <- parEst(df, factors, lambda, iter, 2, llh = T, T, epsilon = epsilon)
   cat("--------------", "Running SVD model", "--------------", '\n')
@@ -78,6 +120,23 @@ Simulation <- function(n, i, dx, dg, factors, sparsity, unknown, lambda,f, epsil
 }
 
 
+#' Returns parameter estimates for full extra info (unknown = 1)
+#'
+#' @param n 
+#' @param i 
+#' @param dx 
+#' @param dg 
+#' @param factors 
+#' @param sparsity 
+#' @param unknown 
+#' @param lambda 
+#' @param f 
+#' @param epsilon 
+#'
+#' @return
+#' @export
+#'
+#' @examples
 Simulation_full_extra_inf <- function(n, i, dx, dg, factors, sparsity, unknown, lambda,f, epsilon){
   alpha <- runif(n, min=-5, max=0)
   beta <- runif(i, min=-5, max=0)
@@ -130,12 +189,115 @@ Simulation_full_extra_inf <- function(n, i, dx, dg, factors, sparsity, unknown, 
   results_old <- parEst(df, factors, lambda, iter, 2, llh = T, T, epsilon = epsilon)
   cat("--------------", "Running SVD model", "--------------", '\n')
   results_full <- ParEst_rest_fullrest(df, X, G, factors, lambda, iter, iter_CD, epsilon = epsilon, T, T )
-
+  
   parameters <- list( "n"= n, "i"= i, "dx" = dx, "dg"=dg, "f"=f, "sparsity"=sparsity,
                       "unknown"=unknown, "factors" = factors, "lambda"=lambda, "iter" = iter, "iter_CD"=iter_CD, epsilon = epsilon)
   return(list("results_old" = results_old, "results_full" = results_full, "parameters" = parameters))
 }
 
+#' Timing simulation
+#'
+#' @param n 
+#' @param i 
+#' @param dx 
+#' @param dg 
+#' @param factors 
+#' @param sparsity 
+#' @param unknown 
+#' @param lambda 
+#' @param f 
+#' @param epsilon 
+#'
+#' @return Data frame with different convergence times and set of parameters
+#' @export
+#'
+#' @examples
+Simulation_time <- function(n, i, dx, dg, factors, sparsity, unknown, lambda,f, epsilon){
+  
+  #Define additional variables
+  iter <- 1000
+  iter_CD <- 50
+  
+  output <- data.frame(n=n, Old= NA, SVD =NA, Eigen = NA, Deriv = rep(NA,5))
+  for(run in 1:5){
+    data <- Get_data(n, i, dx, dg, factors, sparsity, unknown, lambda,f, epsilon)
+    df <- data$df
+    X <- data$X
+    G <- data$G
+    
+    #Run the models
+    cat("--------------", "Running OLD model", "--------------", '\n')
+    results_old <- parEst(df, factors, lambda, iter, 2, llh = T, T, epsilon = epsilon)
+    output[run,2] <- sum(results_old$time)
+    cat("--------------", "Running SVD model", "--------------", '\n')
+    results_SVD <- ParEst_rest_parrest_SVD(df, X, G, factors, lambda, iter, iter_CD, epsilon = epsilon, T, T )
+    output[run,3] <- sum(results_SVD$time)
+    cat("--------------", "Running Eigen model", "--------------", '\n')
+    results_Eigen <- ParEst_rest_parrest_Eigen(df, X, G, factors, lambda, iter, iter_CD, epsilon = epsilon, T, T )
+    output[run,4] <- sum(results_Eigen$time)
+    cat("--------------", "Running Deriv model", "--------------", '\n')
+    results_deriv <- ParEst_rest_parrest_deriv(df, X, G, factors, lambda, iter, iter_CD, epsilon = epsilon, T, T)
+    output[run,5] <- sum(results_deriv$time)
+  }
+  
+  parameters <- list( "n"= n, "i"= i, "dx" = dx, "dg"=dg, "f"=f, "sparsity"=sparsity,
+                      "unknown"=unknown, "factors" = factors, "lambda"=lambda, "iter" = iter, "iter_CD"=iter_CD, epsilon = epsilon)
+  return(list("output"= output, "parameters" = parameters))
+}
+
+#' Same as Simulation_time but now for full unknown unknown = 1
+#'
+#' @param n 
+#' @param i 
+#' @param dx 
+#' @param dg 
+#' @param factors 
+#' @param sparsity 
+#' @param unknown 
+#' @param lambda 
+#' @param f 
+#' @param epsilon 
+#'
+#' @return
+#' @export
+#'
+#' @examples
+Simulation_time_full <- function(n, i, dx, dg, factors, sparsity, unknown, lambda,f, epsilon){
+  
+  #Define additional variables
+  iter <- 1000
+  iter_CD <- 50
+  
+  output <- data.frame(n=n, Old= NA, full = rep(NA,5))
+  for(run in 1:5){
+    data <- Get_data(n, i, dx, dg, factors, sparsity, unknown, lambda, f, epsilon)
+    df <- data$df
+    X <- data$X
+    G <- data$G
+    
+    #Run the models
+    cat("--------------", "Running old model", "--------------", '\n')
+    results_old <- parEst(df, factors, lambda, iter, 2, llh = T, T, epsilon = epsilon)
+    output[run,2] <- sum(results_old$time)
+    cat("--------------", "Running SVD model", "--------------", '\n')
+    results_full <- ParEst_rest_fullrest(df, X, G, factors, lambda, iter, iter_CD, epsilon = epsilon, T, T )
+    output[run,3] <- sum(results_full$time)
+  }
+  
+  parameters <- list( "n"= n, "i"= i, "dx" = dx, "dg"=dg, "f"=f, "sparsity"=sparsity,
+                      "unknown"=unknown, "factors" = factors, "lambda"=lambda, "iter" = iter, "iter_CD"=iter_CD, epsilon = epsilon)
+  return(list("output"= output, "parameters" = parameters))
+}
+
+
+#' This function plots the results from the Simulation function
+#'
+#' @param results 
+#'
+#' @return
+#' @export
+#'
+#' @examples
 plot_results_full <- function(results){
   #Define variables used in the simulation
   n <- results$parameters$n
@@ -177,6 +339,14 @@ plot_results_full <- function(results){
     theme(legend.position = c(0.81, 0.8))
 }
 
+#' This function plots the results from the simulation_full_extra_info function
+#'
+#' @param results 
+#'
+#' @return
+#' @export
+#'
+#' @examples
 plot_results <- function(results){
   #Define variables used in the simulation
   n <- results$parameters$n
@@ -229,7 +399,7 @@ plot_results <- function(results){
 #  theme_bw()
 #Probabilities
 
-#Different timing setups----------
+#Timing simulation setup----------
 
 #Different simulations for nonsparse
 i <- 100
@@ -240,48 +410,81 @@ unknown <- 0.5
 lambda <- 0.5
 factors <- 5
 f <- 5
-epsilon <- 0.005
+epsilon <- 0.01
 
 #Vector with options for N
-N <- c(10^2, round(10^(2.5)), 10^3, round(10^(3.5)), 10^4, round(10^(4.5)),10^5, round(10^(5.5)), 10^6 )
+N <- c(10^2, round(10^(2.5)), 10^3, round(10^(3.5)), 10^4, round(10^(4.5)), 10^5 )
 
 #Define iteration as zero
 iteration <- 0
 
 #formulate results list
 results_sparse <- list()
+
 for(n in N){
   name <- paste("results_", as.character(iteration), sep = "")
-  results_sparse[[name]] <- Simulation(n=n,i=i,dx=dx,dg=dg,factors=factors,sparsity=sparsity,unknown=unknown,lambda=lambda
+  results_sparse[[name]] <- Simulation_time(n=n,i=i,dx=dx,dg=dg,factors=factors,sparsity=sparsity,unknown=unknown,lambda=lambda
                           , f=f, epsilon = epsilon)
   iteration = iteration + 1
 }
 
-saveRDS(results_sparse, "Results_sparse.RDS")
-
+saveRDS(results_sparse, "Results_sparse_5.RDS")
 
 #Second simulation, now set sparsity to 1
 sparsity <- 1
 
-#Vector with options for N
-N <- c(10^2, round(10^(2.5)), 10^3, round(10^(3.5)), 10^4, round(10^(4.5)),10^5, round(10^(5.5)), 10^6 )
+#Define iteration as zero
+iteration <- 0
+results_dense <- list()
+
+#formulate results list
+for(n in N){
+  name <- paste("results_", as.character(iteration), sep = "")
+  results_dense[[name]] <- Simulation_time(n=n,i=i,dx=dx,dg=dg,factors=factors,sparsity=sparsity,unknown=unknown,lambda=lambda
+                                       , f=f, epsilon = epsilon)
+  iteration = iteration + 1
+}
+
+saveRDS(results_dense, "Results_dense_5.RDS")
+
+#Same data for full additional data
+sparsity <- 0.05
+unknown <- 1
+epsilon <- 0.005
 
 #Define iteration as zero
 iteration <- 0
 
 #formulate results list
-results_dense <- list()
+results_sparse_full_small <- list()
+
 for(n in N){
   name <- paste("results_", as.character(iteration), sep = "")
-  results_dense[[name]] <- Simulation(n=n,i=i,dx=dx,dg=dg,factors=factors,sparsity=sparsity,unknown=unknown,lambda=lambda
-                                       , f=f, epsilon = epsilon)
+  results_sparse_full_small[[name]] <- Simulation_time_full(n=n,i=i,dx=dx,dg=dg,factors=factors,sparsity=sparsity,unknown=unknown,lambda=lambda
+                                            , f=f, epsilon = epsilon)
   iteration = iteration + 1
 }
 
-saveRDS(results_dense, "Results_dense.RDS")
+saveRDS(results_sparse_full_small, "Results_sparse_full_5_small.RDS")
 
+#Second simulation, now set sparsity to 1
+sparsity <- 1
 
-#plot for full additional information
+#Define iteration as zero
+iteration <- 0
+results_dense_full_small <- list()
+
+#formulate results list
+for(n in N){
+  name <- paste("results_", as.character(iteration), sep = "")
+  results_dense_full_small[[name]] <- Simulation_time_full(n=n,i=i,dx=dx,dg=dg,factors=factors,sparsity=sparsity,unknown=unknown,lambda=lambda
+                                           , f=f, epsilon = epsilon)
+  iteration = iteration + 1
+}
+
+saveRDS(results_dense_full_small, "Results_dense_full_5_small.RDS")
+
+#Earlier singular simulations----
 n <- 10000
 i <- 200
 dx <- 100
@@ -312,3 +515,95 @@ epsilon <- 0.005
 results_4 <- Simulation_full_extra_inf(n=n,i=i,dx=dx,dg=dg,factors=factors,sparsity=sparsity,unknown=unknown,lambda=lambda
                                        , f=f, epsilon = epsilon)
 plot_results_full(results_4)
+
+
+#Output plots-----
+#' Retrieve difference and absolute stats from raw inputs of Simulation_time
+#'
+#' @param input1 "Dense" matrix
+#' @param input2 "Sparse" matrix
+#'
+#' @return list of differences and absolute values
+#' @export
+#'
+#' @examples
+stats <- function(input1, input2){
+  difference <- data.frame(N = c(10^2, round(10^(2.5)), 10^3, round(10^(3.5)), 10^4, round(10^(4.5)), 10^5),
+                           old = NA, SVD = NA, Eigen = NA, Deriv = NA)
+  absolute_sparse <- data.frame(N = c(10^2, round(10^(2.5)), 10^3, round(10^(3.5)), 10^4, round(10^(4.5)), 10^5),
+                                old = NA, SVD = NA, Eigen = NA, Deriv = NA)
+  for(i in 0:(length(input1)-1)){
+    result_name <- paste("results_",as.character(i),sep = "")
+    
+    #Extract difference various models
+    difference[(i+1),2] <- mean(input1[[result_name]]$output$Old) - mean(input2[[result_name]]$output$Old)
+    difference[(i+1),3] <- mean(input1[[result_name]]$output$SVD) - mean(input2[[result_name]]$output$SVD)
+    difference[(i+1),4] <- mean(input1[[result_name]]$output$Eigen) - mean(input2[[result_name]]$output$Eigen)
+    difference[(i+1),5] <- mean(input1[[result_name]]$output$Deriv) - mean(input2[[result_name]]$output$Deriv)
+    
+    #Extract absolute time of various models
+    absolute_sparse[(i+1),2] <- mean(input2[[result_name]]$output$Old)
+    absolute_sparse[(i+1),3] <- mean(input2[[result_name]]$output$SVD)
+    absolute_sparse[(i+1),4] <- mean(input2[[result_name]]$output$Eigen)
+    absolute_sparse[(i+1),5] <- mean(input2[[result_name]]$output$Deriv)
+  }
+  return(list(difference = difference, absolute_sparse = absolute_sparse))
+}
+
+stats_full <- function(input1, input2){
+  difference <- data.frame(N = c(10^2, round(10^(2.5)), 10^3, round(10^(3.5)), 10^4, round(10^(4.5)), 10^5),
+                           old = NA, full = NA)
+  absolute_sparse <- data.frame(N = c(10^2, round(10^(2.5)), 10^3, round(10^(3.5)), 10^4, round(10^(4.5)), 10^5),
+                                old = NA, full = NA)
+  for(i in 0:(length(input1)-1)){
+    result_name <- paste("results_",as.character(i),sep = "")
+    
+    #Extract difference various models
+    difference[(i+1),2] <- mean(input1[[result_name]]$output$Old) - mean(input2[[result_name]]$output$Old)
+    difference[(i+1),3] <- mean(input1[[result_name]]$output$full) - mean(input2[[result_name]]$output$full)
+
+    #Extract absolute time of various models
+    absolute_sparse[(i+1),2] <- mean(input2[[result_name]]$output$Old)
+    absolute_sparse[(i+1),3] <- mean(input2[[result_name]]$output$full)
+  }
+  return(list(difference = difference, absolute_sparse = absolute_sparse))
+}
+
+
+#Load the results of limited extra information
+Results_sparse_5 <- readRDS("~/Dropbox/Uni/Master_Econometrie/Thesis/Code/R/Results_sparse_5.RDS")
+Results_dense_5 <- readRDS("~/Dropbox/Uni/Master_Econometrie/Thesis/Code/R/Results_dense_5.RDS")
+
+restricted <- stats(Results_dense_5, Results_sparse_5)
+
+difference <- restricted$difference %>% gather(Model,Difference, -N)
+absolute <- restricted$absolute_sparse %>% gather(Model,Absolute, -N)
+
+#Graph the difference
+ggplot(data = difference, aes(x = N, y = Difference, color = Model)) + geom_line(size = 1, alpha = 0.5) +
+  theme_bw()+ xlab("Number of users") + ylab("Difference in convergence time in seconds")+
+  scale_x_log10(breaks = c(0,10,100,1000,10000,100000))+ theme(legend.position = c(0.83, 0.67)) + scale_y_log10()
+
+#Graph the absolute
+ggplot(data = absolute, aes(x = N, y = Absolute, color = Model)) + geom_line(size = 1, alpha = 0.5) +
+  theme_bw()+ xlab("Number of users") + ylab("Difference in convergence time in seconds")+scale_x_log10(breaks = c(0,10,100,1000,10000,100000))
+
+
+#Load results of the full additional information plots
+
+Results_sparse_full_5 <- readRDS("~/Dropbox/Uni/Master_Econometrie/Thesis/Code/R/Results_sparse_full_5.RDS")
+Results_dense_full_5 <- readRDS("~/Dropbox/Uni/Master_Econometrie/Thesis/Code/R/Results_dense_full_5.RDS")
+
+full <- stats_full(Results_dense_full_5, Results_sparse_full_5)
+
+difference_full <- full$difference %>% gather(Model,Difference, -N)
+absolute_full <- full$absolute_sparse %>% gather(Model,Absolute, -N)
+
+ggplot(data = difference_full, aes(x = N, y = Difference, color = Model)) + geom_line(size = 1, alpha = 0.5) +
+  theme_bw()+ xlab("Number of users") + ylab("Difference in convergence time in seconds")+
+  scale_x_log10(breaks = c(0,10,100,1000,10000,100000))+ theme(legend.position = c(0.83, 0.67)) + scale_y_log10()
+
+#Graph the absolute
+ggplot(data = absolute_full, aes(x = N, y = Absolute, color = Model)) + geom_line(size = 1, alpha = 0.5) +
+  theme_bw()+ xlab("Number of users") + ylab("Difference in convergence time in seconds")+scale_x_log10(breaks = c(0,10,100,1000,10000,100000))
+
